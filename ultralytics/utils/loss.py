@@ -73,8 +73,15 @@ class BboxLoss(nn.Module):
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+
+        loss_iou = 0
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        nwd = torch.exp(
+            -torch.pow(Wasserstein(pred_bboxes[fg_mask].T, target_bboxes[fg_mask], xywh=False), 1 / 2) / 1.0)
+        loss_iou1 = ((1.0 - iou).mean()) * 0.3 + ((1.0 - nwd).mean()) * 0.7
+        loss_iou = loss_iou + loss_iou1
 
         # DFL loss
         if self.use_dfl:
@@ -154,7 +161,8 @@ class v8DetectionLoss:
         h = model.args  # hyperparameters
 
         m = model.model[-1]  # Detect() module
-        self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        # self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.bce = AdaptiveThresholdFocalLoss(nn.BCEWithLogitsLoss(reduction="none"))
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -232,7 +240,8 @@ class v8DetectionLoss:
 
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        # loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        loss[1] = self.bce(pred_scores, target_scores).sum() / target_scores_sum  # BCE
 
         # Bbox loss
         if fg_mask.sum():
@@ -732,3 +741,61 @@ class E2EDetectLoss:
         one2one = preds["one2one"]
         loss_one2one = self.one2one(one2one, batch)
         return loss_one2many[0] + loss_one2one[0], loss_one2many[1] + loss_one2one[1]
+
+
+def Wasserstein(box1, box2, xywh=True):
+    box2 = box2.T
+    if xywh:
+        b1_cx, b1_cy = (box1[0] + box1[2]) / 2, (box1[1] + box1[3]) / 2
+        b1_w, b1_h = box1[2] - box1[0], box1[3] - box1[1]
+        b2_cx, b2_cy = (box2[0] + box2[0]) / 2, (box2[1] + box2[3]) / 2
+        b1_w, b1_h = box2[2] - box2[0], box2[3] - box2[1]
+    else:
+        b1_cx, b1_cy, b1_w, b1_h = box1[0], box1[1], box1[2], box1[3]
+        b2_cx, b2_cy, b2_w, b2_h = box2[0], box2[1], box2[2], box2[3]
+    cx_L2Norm = torch.pow((b1_cx - b2_cx), 2)
+    cy_L2Norm = torch.pow((b1_cy - b2_cy), 2)
+    p1 = cx_L2Norm + cy_L2Norm
+    w_FroNorm = torch.pow((b1_w - b2_w)/2, 2)
+    h_FroNorm = torch.pow((b1_h - b2_h)/2, 2)
+    p2 = w_FroNorm + h_FroNorm
+    return p1 + p2
+
+
+# 我的模块 2
+class AdaptiveThresholdFocalLoss(nn.Module):
+    # Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)
+    def __init__(self, loss_fcn, gamma=1.5, alpha=0.25):
+        super(AdaptiveThresholdFocalLoss, self).__init__()
+        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = loss_fcn.reduction
+        self.loss_fcn.reduction = 'none'  # required to apply FL to each element
+
+    def forward(self, pred, true):
+        loss = self.loss_fcn(pred, true)
+        pred_prob = torch.sigmoid(pred)
+        p_t = true * pred_prob + (1 - true) * (1 - pred_prob)  # 得出预测概率
+        p_t = torch.cuda.FloatTensor(p_t)  # 将张量转化为pytorch张量，使其在pytorch中可以进行张量运算
+
+        mean_pt = p_t.mean()
+        p_t_list = []
+        p_t_list.append(mean_pt)
+        p_t_old = sum(p_t_list) / len(p_t_list)
+        p_t_new = 0.05 * p_t_old + 0.95 * mean_pt
+        # gamma =2
+        gamma = -torch.log(p_t_new)
+        # 处理大于0.5的元素
+        p_t_high = torch.where(p_t > 0.5, (1.000001 - p_t) ** gamma, torch.zeros_like(p_t))
+
+        # 处理小于0.5的元素
+        p_t_low = torch.where(p_t <= 0.5, (1.5 - p_t) ** (-torch.log(p_t)), torch.zeros_like(p_t))  # # 将两部分结果相加
+        modulating_factor = p_t_high + p_t_low
+        loss *= modulating_factor
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:  # 'none'
+            return loss

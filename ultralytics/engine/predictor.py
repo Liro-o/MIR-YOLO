@@ -85,6 +85,7 @@ class BasePredictor:
             cfg (str, optional): Path to a configuration file. Defaults to DEFAULT_CFG.
             overrides (dict, optional): Configuration overrides. Defaults to None.
         """
+        self.ir_results = None
         self.args = get_cfg(cfg, overrides)
         self.save_dir = get_save_dir(self.args)
         if self.args.conf is None:
@@ -231,7 +232,8 @@ class BasePredictor:
 
             # Warmup model
             if not self.done_warmup:
-                self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
+                # self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
+                self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, self.args.ch, *self.imgsz))
                 self.done_warmup = True
 
             self.seen, self.windows, self.batch = 0, [], None
@@ -244,13 +246,17 @@ class BasePredictor:
             for self.batch in self.dataset:
                 self.run_callbacks("on_predict_batch_start")
                 paths, im0s, s = self.batch
+                # print(im0s[0].shape)
 
                 # Preprocess
                 with profilers[0]:
-                    im = self.preprocess(im0s)
+                    im = self.preprocess(im0s)  # # 此时传入进来的im0的前三通道是红外，后三通道是可见光， s为图像的路径
+                    # preprocess进过将BGR转RGB，将BHWC转BCHW，前三通道变成可见光，后三通道变成红外！！！！！！
+                    # print(im.shape)
 
                 # Inference
                 with profilers[1]:
+                    # print(im.shape)
                     preds = self.inference(im, *args, **kwargs)
                     if self.args.embed:
                         yield from [preds] if isinstance(preds, torch.Tensor) else preds  # yield embedding tensors
@@ -258,20 +264,45 @@ class BasePredictor:
 
                 # Postprocess
                 with profilers[2]:
-                    self.results = self.postprocess(preds, im, im0s)
+                    # self.results = self.postprocess(preds, im, im0s)
+                    # 判断ch是否大于4，如果大于4，则说明输入的图像是可见光+红外图像，需要分别返回可见光和红外的结果
+                    if self.args.ch >= 4:
+                        self.results, self.ir_results = self.postprocess(preds, im, im0s)
+                    else:
+                        self.results = self.postprocess(preds, im, im0s)
+
+
                 self.run_callbacks("on_predict_postprocess_end")
 
                 # Visualize, save, write results
                 n = len(im0s)
                 for i in range(n):
                     self.seen += 1
-                    self.results[i].speed = {
-                        "preprocess": profilers[0].dt * 1e3 / n,
-                        "inference": profilers[1].dt * 1e3 / n,
-                        "postprocess": profilers[2].dt * 1e3 / n,
-                    }
+                    if self.args.ch >= 4:
+                        self.results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+                        }
+                        self.ir_results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+                        }
+                    else:
+                        self.results[i].speed = {
+                            "preprocess": profilers[0].dt * 1e3 / n,
+                            "inference": profilers[1].dt * 1e3 / n,
+                            "postprocess": profilers[2].dt * 1e3 / n,
+                        }
+
+                    # 先将可见光结果保存
                     if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
-                        s[i] += self.write_results(i, Path(paths[i]), im, s)
+                        s[i] += self.write_results(i, Path(paths[i]), im[:, :3], s, self.results)
+                    # 如果红外结果不为空，则将红外结果保存
+                    if self.ir_results is not None:
+                        if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
+                            self.write_results(i, Path(paths[i][:-4] + 'ir' + paths[i][-4:]), im[:, 3:], s, self.ir_results)
 
                 # Print batch results
                 if self.args.verbose:
@@ -315,7 +346,7 @@ class BasePredictor:
         self.args.half = self.model.fp16  # update half
         self.model.eval()
 
-    def write_results(self, i, p, im, s):
+    def write_results(self, i, p, im, s, results):
         """Write inference results to a file or directory."""
         string = ""  # print string
         if len(im.shape) == 3:
@@ -329,7 +360,8 @@ class BasePredictor:
 
         self.txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
         string += "%gx%g " % im.shape[2:]
-        result = self.results[i]
+        # result = self.results[i]
+        result = results[i]
         result.save_dir = self.save_dir.__str__()  # used in other locations
         string += f"{result.verbose()}{result.speed['inference']:.1f}ms"
 

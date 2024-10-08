@@ -35,9 +35,18 @@ class DetectionPredictor(BasePredictor):
             orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
 
         results = []
+        ir_result = []
         for i, pred in enumerate(preds):
-            orig_img = orig_imgs[i]
+            # orig_img = orig_imgs[i]
+            # 先推理可见光
+            orig_img = orig_imgs[i][..., 3:]    # 此时传入进来的im0的前三通道是红外，后三通道是可见光
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             img_path = self.batch[0][i]
             results.append(Results(orig_img, path=img_path, names=self.model.names, boxes=pred))
-        return results
+            # 再推理红外
+            ir_path = img_path.split('images')
+            ir_path = str(ir_path[0] + 'image' + ir_path[1])
+            if orig_imgs[i].shape[-1] >= 4:
+                ir_img = orig_imgs[i][..., :3]
+                ir_result.append(Results(ir_img, path=ir_path, names=self.model.names, boxes=pred))
+        return results, ir_result

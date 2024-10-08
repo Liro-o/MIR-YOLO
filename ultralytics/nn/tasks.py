@@ -1,5 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-
+from .modules.MyModules import *
 import contextlib
 from copy import deepcopy
 from pathlib import Path
@@ -55,6 +55,12 @@ from ultralytics.nn.modules import (
     Segment,
     WorldDetect,
     v10Detect,
+    EFBlock,
+    Multiin,
+    CrossTransformerFusion,
+    IN,
+    CPCA,
+    FeatureAdd,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -898,8 +904,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
     if verbose:
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
+
+    # ch 存储每个layer的输入通道数 ch[-1]为最后一层的输出通道数
     ch = [ch]
+    # layers将每个layer存储进列表，save存储当前layer用到前面layer的index，c2每个layer的输出通道数
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+    # 遍历backbone和head组成的列表生成网络结构
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
         for j, a in enumerate(args):
@@ -907,6 +917,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
 
+        # 如果重复次数大于1则缩放模块重复次数，并且重复次数最小为1；如果重复系数为1，不操作
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
         if m in {
             Classify,
@@ -939,7 +950,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             PSA,
             SCDown,
             C2fCIB,
+            EFBlock,
+
+            C2f_moga,
+            RepNCSPELAN4_my,
         }:
+            # c1为layer的输入通道数，c2为layer的输出通道数
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
@@ -950,9 +966,23 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 )  # num heads
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB}:
+            if m in {BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB, C2f_moga,
+                     }:
                 args.insert(2, n)  # number of repeats
                 n = 1
+        elif m is CPCA:
+            c1 = ch[f[0]] + ch[f[1]]  # input channels
+            c2 = c1 // 2
+            args = [c1, c2]
+        elif m is FeatureAdd:
+            c2 = ch[f[0]]
+        elif m is CrossTransformerFusion:
+            c1 = ch[f[0]]   # input channels
+            c2 = sum(ch[x] for x in f)     # output channels
+            args = [c1, *args]
+        elif m is Multiin:
+            c1 = ch[f]
+            c2 = ch[f]//2
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in {HGStem, HGBlock}:

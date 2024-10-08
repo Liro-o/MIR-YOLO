@@ -236,7 +236,7 @@ class Mosaic(BaseMixTransform):
             padw, padh = c[:2]
             x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
 
-            img3[y1:y2, x1:x2] = img[y1 - padh :, x1 - padw :]  # img3[ymin:ymax, xmin:xmax]
+            img3[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img3[ymin:ymax, xmin:xmax]
             # hp, wp = h, w  # height, width previous for next iteration
 
             # Labels assuming imgsz*2 mosaic size
@@ -244,7 +244,7 @@ class Mosaic(BaseMixTransform):
             mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
 
-        final_labels["img"] = img3[-self.border[0] : self.border[0], -self.border[1] : self.border[1]]
+        final_labels["img"] = img3[-self.border[0]: self.border[0], -self.border[1]: self.border[1]]
         return final_labels
 
     def _mosaic4(self, labels):
@@ -320,7 +320,7 @@ class Mosaic(BaseMixTransform):
             x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
 
             # Image
-            img9[y1:y2, x1:x2] = img[y1 - padh :, x1 - padw :]  # img9[ymin:ymax, xmin:xmax]
+            img9[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img9[ymin:ymax, xmin:xmax]
             hp, wp = h, w  # height, width previous for next iteration
 
             # Labels assuming imgsz*2 mosaic size
@@ -328,7 +328,7 @@ class Mosaic(BaseMixTransform):
             mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
 
-        final_labels["img"] = img9[-self.border[0] : self.border[0], -self.border[1] : self.border[1]]
+        final_labels["img"] = img9[-self.border[0]: self.border[0], -self.border[1]: self.border[1]]
         return final_labels
 
     @staticmethod
@@ -413,7 +413,7 @@ class RandomPerspective:
     """
 
     def __init__(
-        self, degrees=0.0, translate=0.1, scale=0.5, shear=0.0, perspective=0.0, border=(0, 0), pre_transform=None
+            self, degrees=0.0, translate=0.1, scale=0.5, shear=0.0, perspective=0.0, border=(0, 0), pre_transform=None
     ):
         """Initializes RandomPerspective object with transformation parameters."""
 
@@ -655,7 +655,7 @@ class RandomHSV:
         img = labels["img"]
         if self.hgain or self.sgain or self.vgain:
             r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
-            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+            # hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
             dtype = img.dtype  # uint8
 
             x = np.arange(0, 256, dtype=r.dtype)
@@ -663,8 +663,20 @@ class RandomHSV:
             lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
             lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
-            im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
-            cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+            # 当输入图像包含红外和可见光时，需要分别调整，再合并
+            if img.shape[-1] > 5:
+                hue, sat, val = cv2.split(cv2.cvtColor(img[..., -3:], cv2.COLOR_BGR2HSV))
+                hue_, sat_, val_ = cv2.split(cv2.cvtColor(img[..., :-3], cv2.COLOR_BGR2HSV))
+                im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+                im_hsv_ = cv2.merge((cv2.LUT(hue_, lut_hue), cv2.LUT(sat_, lut_sat), cv2.LUT(val_, lut_val)))
+                img[..., -3:] = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
+                img[..., :-3] = cv2.cvtColor(im_hsv_, cv2.COLOR_HSV2BGR)  # no return needed
+                labels['img'] = img
+            else:
+                hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+                im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+                cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+
         return labels
 
 
@@ -771,9 +783,12 @@ class LetterBox:
             img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
         top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
         left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
-        img = cv2.copyMakeBorder(
-            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
-        )  # add border
+        img = np.array(img)
+        pad_values = ((114, 114), (114, 114), (0, 0))
+        img = np.pad(img, ((top, bottom), (left, right), (0, 0)), mode='constant', constant_values=pad_values)
+        # img = cv2.copyMakeBorder(
+        #     img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        # )  # add border
         if labels.get("ratio_pad"):
             labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
 
@@ -990,16 +1005,16 @@ class Format:
     """
 
     def __init__(
-        self,
-        bbox_format="xywh",
-        normalize=True,
-        return_mask=False,
-        return_keypoint=False,
-        return_obb=False,
-        mask_ratio=4,
-        mask_overlap=True,
-        batch_idx=True,
-        bgr=0.0,
+            self,
+            bbox_format="xywh",
+            normalize=True,
+            return_mask=False,
+            return_keypoint=False,
+            return_obb=False,
+            mask_ratio=4,
+            mask_overlap=True,
+            batch_idx=True,
+            bgr=0.0,
     ):
         """Initializes the Format class with given parameters."""
         self.bbox_format = bbox_format
@@ -1088,12 +1103,12 @@ class RandomLoadText:
     """
 
     def __init__(
-        self,
-        prompt_format: str = "{}",
-        neg_samples: Tuple[int, int] = (80, 80),
-        max_samples: int = 80,
-        padding: bool = False,
-        padding_value: str = "",
+            self,
+            prompt_format: str = "{}",
+            neg_samples: Tuple[int, int] = (80, 80),
+            max_samples: int = 80,
+            padding: bool = False,
+            padding_value: str = "",
     ) -> None:
         """Initializes the RandomLoadText class with given parameters."""
         self.prompt_format = prompt_format
@@ -1188,11 +1203,11 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
 
 # Classification augmentations -----------------------------------------------------------------------------------------
 def classify_transforms(
-    size=224,
-    mean=DEFAULT_MEAN,
-    std=DEFAULT_STD,
-    interpolation=Image.BILINEAR,
-    crop_fraction: float = DEFAULT_CROP_FRACTION,
+        size=224,
+        mean=DEFAULT_MEAN,
+        std=DEFAULT_STD,
+        interpolation=Image.BILINEAR,
+        crop_fraction: float = DEFAULT_CROP_FRACTION,
 ):
     """
     Classification transforms for evaluation/inference. Inspired by timm/data/transforms_factory.py.
@@ -1235,20 +1250,20 @@ def classify_transforms(
 
 # Classification training augmentations --------------------------------------------------------------------------------
 def classify_augmentations(
-    size=224,
-    mean=DEFAULT_MEAN,
-    std=DEFAULT_STD,
-    scale=None,
-    ratio=None,
-    hflip=0.5,
-    vflip=0.0,
-    auto_augment=None,
-    hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
-    hsv_s=0.4,  # image HSV-Saturation augmentation (fraction)
-    hsv_v=0.4,  # image HSV-Value augmentation (fraction)
-    force_color_jitter=False,
-    erasing=0.0,
-    interpolation=Image.BILINEAR,
+        size=224,
+        mean=DEFAULT_MEAN,
+        std=DEFAULT_STD,
+        scale=None,
+        ratio=None,
+        hflip=0.5,
+        vflip=0.0,
+        auto_augment=None,
+        hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
+        hsv_s=0.4,  # image HSV-Saturation augmentation (fraction)
+        hsv_v=0.4,  # image HSV-Value augmentation (fraction)
+        force_color_jitter=False,
+        erasing=0.0,
+        interpolation=Image.BILINEAR,
 ):
     """
     Classification transforms with augmentation for training. Inspired by timm/data/transforms_factory.py.
@@ -1376,7 +1391,7 @@ class ClassifyLetterBox:
 
         # Create padded image
         im_out = np.full((hs, ws, 3), 114, dtype=im.dtype)
-        im_out[top : top + h, left : left + w] = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+        im_out[top: top + h, left: left + w] = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
         return im_out
 
 
@@ -1404,7 +1419,7 @@ class CenterCrop:
         imh, imw = im.shape[:2]
         m = min(imh, imw)  # min dimension
         top, left = (imh - m) // 2, (imw - m) // 2
-        return cv2.resize(im[top : top + m, left : left + m], (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+        return cv2.resize(im[top: top + m, left: left + m], (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
 
 # NOTE: keep this class for backward compatibility

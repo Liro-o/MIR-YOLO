@@ -16,7 +16,7 @@ import torch
 from PIL import Image
 
 from ultralytics.data.utils import FORMATS_HELP_MSG, IMG_FORMATS, VID_FORMATS
-from ultralytics.utils import IS_COLAB, IS_KAGGLE, LOGGER, ops
+from ultralytics.utils import IS_COLAB, IS_KAGGLE, LOGGER, ops, DEFAULT_CFG
 from ultralytics.utils.checks import check_requirements
 
 
@@ -273,6 +273,7 @@ class LoadImagesAndVideos:
 
     def __init__(self, path, batch=1, vid_stride=1):
         """Initialize the Dataloader and raise FileNotFoundError if file not found."""
+        self.hyp = DEFAULT_CFG
         parent = None
         if isinstance(path, str) and Path(path).suffix == ".txt":  # *.txt file with img/vid/dir on each line
             parent = Path(path).parent
@@ -331,6 +332,11 @@ class LoadImagesAndVideos:
                     raise StopIteration
 
             path = self.files[self.count]
+
+            # 获取红外图像的路径
+            ir_path = path.split('images')
+            ir_path = str(ir_path[0] + 'image' + ir_path[1])
+
             if self.video_flag[self.count]:
                 self.mode = "video"
                 if not self.cap or not self.cap.isOpened():
@@ -360,7 +366,10 @@ class LoadImagesAndVideos:
                         self._new_video(self.files[self.count])
             else:
                 self.mode = "image"
-                im0 = cv2.imread(path)  # BGR
+                # im0 = cv2.imread(path)  # BGR
+                # 如果ch小于4，说明是可见光图像，否则是红外图像和可见光的合并图像
+                im0 = cv2.imread(path) if self.hyp.ch < 4 else cv2.merge((cv2.imread(ir_path), cv2.imread(path)))
+
                 if im0 is None:
                     LOGGER.warning(f"WARNING ⚠️ Image Read Error {path}")
                 else:

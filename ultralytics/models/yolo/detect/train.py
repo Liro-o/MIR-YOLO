@@ -123,14 +123,23 @@ class DetectionTrainer(BaseTrainer):
     def plot_training_samples(self, batch, ni):
         """Plots training samples with their annotations."""
         plot_images(
-            images=batch["img"],
+            images=batch["img"][:, :3], # 先画RGB图像
             batch_idx=batch["batch_idx"],
             cls=batch["cls"].squeeze(-1),
             bboxes=batch["bboxes"],
             paths=batch["im_file"],
-            fname=self.save_dir / f"train_batch{ni}.jpg",
+            fname=self.save_dir / f"train_batch_vis{ni}.jpg",
             on_plot=self.on_plot,
         )
+
+        if batch['img'].size(1) > 3:
+            plot_images(images=batch['img'][:, 3:], # 再画IR图像
+                        batch_idx=batch['batch_idx'],
+                        cls=batch['cls'].squeeze(-1),
+                        bboxes=batch['bboxes'],
+                        paths=batch['im_file'],
+                        fname=self.save_dir / f'train_batch_ir{ni}.jpg',
+                        on_plot=self.on_plot)
 
     def plot_metrics(self):
         """Plots metrics from a CSV file."""

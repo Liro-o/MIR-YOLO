@@ -324,6 +324,7 @@ def get_flops(model, imgsz=640):
             imgsz = [imgsz, imgsz]  # expand if int/float
         try:
             # Use stride size for input tensor
+            # stride = 640
             stride = max(int(model.stride.max()), 32) if hasattr(model, "stride") else 32  # max stride
             im = torch.empty((1, p.shape[1], stride, stride), device=p.device)  # input image in BCHW format
             flops = thop.profile(deepcopy(model), inputs=[im], verbose=False)[0] / 1e9 * 2  # stride GFLOPs
@@ -334,6 +335,20 @@ def get_flops(model, imgsz=640):
             return thop.profile(deepcopy(model), inputs=[im], verbose=False)[0] / 1e9 * 2  # imgsz GFLOPs
     except Exception:
         return 0.0
+
+# def get_flops(model, imgsz=640):
+#     """Return a YOLO model's FLOPs."""
+#     try:
+#         model = de_parallel(model)
+#         p = next(model.parameters())
+#         stride = 640
+#         im = torch.empty((1, 3, stride, stride), device=p.device)  # input image in BCHW format
+#         flops = thop.profile(deepcopy(model), inputs=[im], verbose=False)[0] / 1E9 * 2 if thop else 0  # stride GFLOPs
+#         imgsz = imgsz if isinstance(imgsz, list) else [imgsz, imgsz]  # expand if int/float
+#         return flops * imgsz[0] / stride * imgsz[1] / stride  # 640x640 GFLOPs
+#     except Exception as e:
+#         print(e)
+#         return 0
 
 
 def get_flops_with_torch_profiler(model, imgsz=640):
