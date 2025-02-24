@@ -1,3 +1,2 @@
 # MIR-YOLO
-In the code provided above, some content has been omitted. The complete code will be released after the paper undergoes minor revisions.
-
+We have uploaded all the code related to the network model we designed, which will be fully disclosed here upon acceptance of the paper.
